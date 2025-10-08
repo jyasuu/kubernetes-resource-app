@@ -2,8 +2,8 @@
 // Provides Prometheus metrics for monitoring controller performance
 
 use prometheus::{
-    register_counter_vec, register_gauge_vec, register_histogram_vec, 
-    CounterVec, GaugeVec, HistogramVec, Encoder, TextEncoder
+    register_counter_vec, register_gauge_vec, register_histogram_vec, CounterVec, Encoder,
+    GaugeVec, HistogramVec, TextEncoder,
 };
 use std::time::Instant;
 use warp::{Filter, Reply};
@@ -71,6 +71,12 @@ pub struct MetricsCollector {
     start_time: Instant,
 }
 
+impl Default for MetricsCollector {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MetricsCollector {
     pub fn new() -> Self {
         // Initialize controller info metric
@@ -136,26 +142,28 @@ impl ReconcileTimer {
     /// Complete the reconciliation with success
     pub fn success(self) {
         let duration = self.start.elapsed().as_secs_f64();
-        
+
         RECONCILE_COUNTER
             .with_label_values(&[&self.namespace, &self.name, "success"])
             .inc();
-        
+
         RECONCILE_DURATION
             .with_label_values(&[&self.namespace, &self.name])
             .observe(duration);
 
-        ACTIVE_RECONCILES.with_label_values(&[&self.namespace]).dec();
+        ACTIVE_RECONCILES
+            .with_label_values(&[&self.namespace])
+            .dec();
     }
 
     /// Complete the reconciliation with error
     pub fn error(self, error_type: &str) {
         let duration = self.start.elapsed().as_secs_f64();
-        
+
         RECONCILE_COUNTER
             .with_label_values(&[&self.namespace, &self.name, "error"])
             .inc();
-        
+
         RECONCILE_DURATION
             .with_label_values(&[&self.namespace, &self.name])
             .observe(duration);
@@ -164,7 +172,9 @@ impl ReconcileTimer {
             .with_label_values(&[error_type, &self.namespace])
             .inc();
 
-        ACTIVE_RECONCILES.with_label_values(&[&self.namespace]).dec();
+        ACTIVE_RECONCILES
+            .with_label_values(&[&self.namespace])
+            .dec();
     }
 }
 
@@ -178,11 +188,11 @@ impl WebhookTimer {
     /// Complete the webhook request with success
     pub fn success(self) {
         let duration = self.start.elapsed().as_secs_f64();
-        
+
         WEBHOOK_COUNTER
             .with_label_values(&[&self.webhook_type, "success"])
             .inc();
-        
+
         WEBHOOK_DURATION
             .with_label_values(&[&self.webhook_type])
             .observe(duration);
@@ -191,11 +201,11 @@ impl WebhookTimer {
     /// Complete the webhook request with error
     pub fn error(self) {
         let duration = self.start.elapsed().as_secs_f64();
-        
+
         WEBHOOK_COUNTER
             .with_label_values(&[&self.webhook_type, "error"])
             .inc();
-        
+
         WEBHOOK_DURATION
             .with_label_values(&[&self.webhook_type])
             .observe(duration);
@@ -224,28 +234,24 @@ pub fn metrics_handler() -> impl Filter<Extract = impl Reply, Error = warp::Reje
 
 /// Health check endpoint
 pub fn health_handler() -> impl Filter<Extract = impl Reply, Error = warp::Rejection> + Clone {
-    warp::path("health")
-        .and(warp::get())
-        .map(|| {
-            warp::reply::json(&serde_json::json!({
-                "status": "healthy",
-                "timestamp": chrono::Utc::now().to_rfc3339(),
-                "version": env!("CARGO_PKG_VERSION")
-            }))
-        })
+    warp::path("health").and(warp::get()).map(|| {
+        warp::reply::json(&serde_json::json!({
+            "status": "healthy",
+            "timestamp": chrono::Utc::now().to_rfc3339(),
+            "version": env!("CARGO_PKG_VERSION")
+        }))
+    })
 }
 
 /// Readiness check endpoint
 pub fn ready_handler() -> impl Filter<Extract = impl Reply, Error = warp::Rejection> + Clone {
-    warp::path("ready")
-        .and(warp::get())
-        .map(|| {
-            // Add readiness checks here (e.g., Kubernetes API connectivity)
-            warp::reply::json(&serde_json::json!({
-                "status": "ready",
-                "timestamp": chrono::Utc::now().to_rfc3339()
-            }))
-        })
+    warp::path("ready").and(warp::get()).map(|| {
+        // Add readiness checks here (e.g., Kubernetes API connectivity)
+        warp::reply::json(&serde_json::json!({
+            "status": "ready",
+            "timestamp": chrono::Utc::now().to_rfc3339()
+        }))
+    })
 }
 
 #[cfg(test)]
@@ -255,7 +261,7 @@ mod tests {
     #[test]
     fn test_metrics_collector() {
         let collector = MetricsCollector::new();
-        
+
         // Test reconcile timing
         let timer = collector.start_reconcile("default", "test-app");
         std::thread::sleep(std::time::Duration::from_millis(10));
@@ -275,7 +281,7 @@ mod tests {
     #[test]
     fn test_webhook_timing() {
         let collector = MetricsCollector::new();
-        
+
         let timer = collector.start_webhook("validate");
         std::thread::sleep(std::time::Duration::from_millis(5));
         timer.success();
