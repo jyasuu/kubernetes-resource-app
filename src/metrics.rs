@@ -144,15 +144,15 @@ impl ReconcileTimer {
         let duration = self.start.elapsed().as_secs_f64();
 
         RECONCILE_COUNTER
-            .with_label_values(&[&self.namespace, &self.name, "success"])
+            .with_label_values(&[self.namespace.as_str(), self.name.as_str(), "success"])
             .inc();
 
         RECONCILE_DURATION
-            .with_label_values(&[&self.namespace, &self.name])
+            .with_label_values(&[self.namespace.as_str(), self.name.as_str()])
             .observe(duration);
 
         ACTIVE_RECONCILES
-            .with_label_values(&[&self.namespace])
+            .with_label_values(&[self.namespace.as_str()])
             .dec();
     }
 
@@ -161,19 +161,19 @@ impl ReconcileTimer {
         let duration = self.start.elapsed().as_secs_f64();
 
         RECONCILE_COUNTER
-            .with_label_values(&[&self.namespace, &self.name, "error"])
+            .with_label_values(&[self.namespace.as_str(), self.name.as_str(), "error"])
             .inc();
 
         RECONCILE_DURATION
-            .with_label_values(&[&self.namespace, &self.name])
+            .with_label_values(&[self.namespace.as_str(), self.name.as_str()])
             .observe(duration);
 
         ERROR_COUNTER
-            .with_label_values(&[error_type, &self.namespace])
+            .with_label_values(&[error_type, self.namespace.as_str()])
             .inc();
 
         ACTIVE_RECONCILES
-            .with_label_values(&[&self.namespace])
+            .with_label_values(&[self.namespace.as_str()])
             .dec();
     }
 }
@@ -190,7 +190,7 @@ impl WebhookTimer {
         let duration = self.start.elapsed().as_secs_f64();
 
         WEBHOOK_COUNTER
-            .with_label_values(&[&self.webhook_type, "success"])
+            .with_label_values(&[self.webhook_type.as_str(), "success"])
             .inc();
 
         WEBHOOK_DURATION
@@ -203,11 +203,11 @@ impl WebhookTimer {
         let duration = self.start.elapsed().as_secs_f64();
 
         WEBHOOK_COUNTER
-            .with_label_values(&[&self.webhook_type, "error"])
+            .with_label_values(&[self.webhook_type.as_str(), "error"])
             .inc();
 
         WEBHOOK_DURATION
-            .with_label_values(&[&self.webhook_type])
+            .with_label_values(&[self.webhook_type.as_str()])
             .observe(duration);
     }
 }
