@@ -1,0 +1,16 @@
+apiVersion: example.com/v1
+kind: MyApp
+metadata:
+  name: sample-app
+  namespace: default
+  labels:
+    environment: production
+spec:
+  replicas: 3
+  image: nginx:1.21.0
+  envVars:
+    APP_ENV: production
+    LOG_LEVEL: info
+  resources:
+    cpu: "500m"
+    memory: "512Mi"

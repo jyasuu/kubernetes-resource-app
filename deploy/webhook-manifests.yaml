@@ -1,0 +1,100 @@
+---
+# Validating Webhook Configuration
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: myapp-validator
+webhooks:
+  - name: validate.myapps.example.com
+    admissionReviewVersions: ["v1", "v1beta1"]
+    clientConfig:
+      service:
+        name: myapp-webhook
+        namespace: default
+        path: /validate
+      caBundle: "" # Will be filled by cert generation script
+    rules:
+      - operations: ["CREATE", "UPDATE"]
+        apiGroups: ["example.com"]
+        apiVersions: ["v1"]
+        resources: ["myapps"]
+    failurePolicy: Fail
+    sideEffects: None
+    timeoutSeconds: 10
+
+---
+# Mutating Webhook Configuration
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: myapp-mutator
+webhooks:
+  - name: mutate.myapps.example.com
+    admissionReviewVersions: ["v1", "v1beta1"]
+    clientConfig:
+      service:
+        name: myapp-webhook
+        namespace: default
+        path: /mutate
+      caBundle: "" # Will be filled by cert generation script
+    rules:
+      - operations: ["CREATE", "UPDATE"]
+        apiGroups: ["example.com"]
+        apiVersions: ["v1"]
+        resources: ["myapps"]
+    failurePolicy: Fail
+    sideEffects: None
+    timeoutSeconds: 10
+
+---
+# Webhook Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: myapp-webhook
+  namespace: default
+spec:
+  selector:
+    app: myapp-webhook
+  ports:
+    - port: 443
+      targetPort: 8443
+      protocol: TCP
+
+---
+# Webhook Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: myapp-webhook
+  namespace: default
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: myapp-webhook
+  template:
+    metadata:
+      labels:
+        app: myapp-webhook
+    spec:
+      containers:
+        - name: webhook
+          image: myapp-controller:latest
+          command: ["/app/myapp-controller", "webhook"]
+          ports:
+            - containerPort: 8443
+              name: webhook
+          volumeMounts:
+            - name: webhook-certs
+              mountPath: /etc/webhook/certs
+              readOnly: true
+          env:
+            - name: TLS_CERT_FILE
+              value: /etc/webhook/certs/tls.crt
+            - name: TLS_KEY_FILE
+              value: /etc/webhook/certs/tls.key
+      volumes:
+        - name: webhook-certs
+          secret:
+            secretName: myapp-webhook-certs
