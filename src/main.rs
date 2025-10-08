@@ -5,6 +5,12 @@ use std::collections::BTreeMap;
 use futures_util::StreamExt;
 use json_patch::{Patch as JsonPatch, PatchOperation, AddOperation};
 
+mod metrics;
+mod scheduling;
+
+use metrics::{MetricsCollector, metrics_handler, health_handler, ready_handler};
+use scheduling::{SchedulingConfig, AdvancedScheduler};
+
 // Define your Custom Resource with proper derive macros
 #[derive(CustomResource, Serialize, Deserialize, Debug, Clone, JsonSchema)]
 #[kube(
@@ -34,6 +40,10 @@ pub struct MyAppSpec {
     /// Resource requirements
     #[serde(default)]
     pub resources: Option<ResourceRequirements>,
+    
+    /// Advanced scheduling configuration
+    #[serde(default)]
+    pub scheduling: Option<SchedulingConfig>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, JsonSchema)]
@@ -451,6 +461,7 @@ pub enum ReconcileError {
 
 pub struct Context {
     pub client: Client,
+    pub metrics: MetricsCollector,
 }
 
 pub async fn reconcile(myapp: Arc<MyApp>, ctx: Arc<Context>) -> Result<Action, ReconcileError> {
@@ -458,17 +469,27 @@ pub async fn reconcile(myapp: Arc<MyApp>, ctx: Arc<Context>) -> Result<Action, R
     let name = myapp.name_any();
     let api: Api<MyApp> = Api::namespaced(ctx.client.clone(), &ns);
     
+    // Start metrics timer
+    let timer = ctx.metrics.start_reconcile(&ns, &name);
+    
     // Handle deletion with finalizer
     if myapp.metadata.deletion_timestamp.is_some() {
         if myapp.finalizers().contains(&FINALIZER.to_string()) {
             // Perform cleanup
             cleanup_resources(&myapp, ctx.client.clone()).await
-                .map_err(|e| ReconcileError::FinalizerError(e.to_string()))?;
+                .map_err(|e| {
+                    ctx.metrics.record_error("finalizer_cleanup_error", &ns);
+                    ReconcileError::FinalizerError(e.to_string())
+                })?;
             
             // Remove finalizer
-            remove_finalizer(&myapp, ctx.client.clone()).await?;
+            remove_finalizer(&myapp, ctx.client.clone()).await.map_err(|e| {
+                ctx.metrics.record_error("finalizer_removal_error", &ns);
+                e
+            })?;
             println!("Finalizer removed for MyApp {}/{}", ns, name);
         }
+        timer.success();
         return Ok(Action::await_change());
     }
     
@@ -481,7 +502,10 @@ pub async fn reconcile(myapp: Arc<MyApp>, ctx: Arc<Context>) -> Result<Action, R
     
     // Validate the resource
     myapp.validate()
-        .map_err(ReconcileError::ValidationError)?;
+        .map_err(|e| {
+            ctx.metrics.record_error("validation_error", &ns);
+            ReconcileError::ValidationError(e)
+        })?;
     
     println!("Reconciling MyApp {}/{}", ns, name);
     
@@ -533,14 +557,29 @@ pub async fn reconcile(myapp: Arc<MyApp>, ctx: Arc<Context>) -> Result<Action, R
         &Patch::Merge(&status_patch)
     ).await?;
     
+    // Update metrics
+    ctx.metrics.set_managed_resources("deployment", &ns, 1);
+    ctx.metrics.set_managed_resources("service", &ns, 1);
+    
+    timer.success();
     Ok(Action::requeue(std::time::Duration::from_secs(300)))
 }
 
 pub fn error_policy(
-    _myapp: Arc<MyApp>,
+    myapp: Arc<MyApp>,
     error: &ReconcileError,
-    _ctx: Arc<Context>,
+    ctx: Arc<Context>,
 ) -> Action {
+    let ns = myapp.namespace().unwrap_or_default();
+    
+    // Record error in metrics
+    let error_type = match error {
+        ReconcileError::KubeError(_) => "kube_error",
+        ReconcileError::ValidationError(_) => "validation_error",
+        ReconcileError::FinalizerError(_) => "finalizer_error",
+    };
+    ctx.metrics.record_error(error_type, &ns);
+    
     eprintln!("Reconciliation error: {:?}", error);
     Action::requeue(std::time::Duration::from_secs(60))
 }
@@ -566,12 +605,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         // Run controller
         let client = Client::try_default().await?;
+        let metrics = MetricsCollector::new();
         let context = Arc::new(Context {
             client: client.clone(),
+            metrics,
         });
         
         let myapps = Api::<MyApp>::all(client);
         
+        // Start metrics server
+        let metrics_routes = metrics_handler()
+            .or(health_handler())
+            .or(ready_handler());
+        
+        tokio::spawn(async {
+            println!("Starting metrics server on :8080");
+            warp::serve(metrics_routes)
+                .run(([0, 0, 0, 0], 8080))
+                .await;
+        });
+        
+        // Start health server
+        tokio::spawn(async {
+            let health_routes = health_handler().or(ready_handler());
+            println!("Starting health server on :8081");
+            warp::serve(health_routes)
+                .run(([0, 0, 0, 0], 8081))
+                .await;
+        });
+        
+        println!("Starting MyApp controller...");
         Controller::new(myapps, Default::default())
             .run(reconcile, error_policy, context)
             .for_each(|res| async move {

@@ -55,6 +55,25 @@ spec:
                 - cpu
                 - memory
                 type: object
+              scheduling:
+                description: Advanced scheduling configuration
+                nullable: true
+                properties:
+                  nodeSelector:
+                    additionalProperties:
+                      type: string
+                    default: {}
+                    description: Node selection preferences
+                    type: object
+                  priorityClass:
+                    description: Priority class for pod scheduling
+                    nullable: true
+                    type: string
+                  schedulerName:
+                    description: Scheduler name (for custom schedulers)
+                    nullable: true
+                    type: string
+                type: object
             required:
             - image
             - replicas

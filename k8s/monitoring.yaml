@@ -1,0 +1,64 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: myapp-controller
+  namespace: ${NAMESPACE}
+  labels:
+    app.kubernetes.io/name: myapp-controller
+    app.kubernetes.io/component: controller
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: myapp-controller
+  endpoints:
+  - port: metrics
+    interval: 30s
+    path: /metrics
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: myapp-controller-alerts
+  namespace: ${NAMESPACE}
+  labels:
+    app.kubernetes.io/name: myapp-controller
+    app.kubernetes.io/component: controller
+spec:
+  groups:
+  - name: myapp-controller.rules
+    rules:
+    - alert: MyAppControllerDown
+      expr: up{job="myapp-controller-metrics"} == 0
+      for: 5m
+      labels:
+        severity: critical
+      annotations:
+        summary: "MyApp Controller is down"
+        description: "MyApp Controller has been down for more than 5 minutes"
+    
+    - alert: MyAppReconcileErrors
+      expr: rate(myapp_errors_total[5m]) > 0.1
+      for: 2m
+      labels:
+        severity: warning
+      annotations:
+        summary: "High error rate in MyApp reconciliation"
+        description: "MyApp Controller is experiencing {{ $value }} errors per second"
+    
+    - alert: MyAppReconcileDurationHigh
+      expr: histogram_quantile(0.95, rate(myapp_reconcile_duration_seconds_bucket[5m])) > 30
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "MyApp reconciliation taking too long"
+        description: "95th percentile reconciliation duration is {{ $value }}s"
+    
+    - alert: MyAppWebhookErrors
+      expr: rate(myapp_webhook_requests_total{result="error"}[5m]) > 0.05
+      for: 1m
+      labels:
+        severity: warning
+      annotations:
+        summary: "MyApp webhook errors detected"
+        description: "Webhook error rate is {{ $value }} per second"
