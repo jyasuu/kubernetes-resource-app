@@ -1,0 +1,113 @@
+name: Deploy to Kubernetes
+
+on:
+  push:
+    tags: [ 'v*' ]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+        - staging
+        - production
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  deploy:
+    name: Deploy to Kubernetes
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment || 'staging' }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up kubectl
+      uses: azure/setup-kubectl@v3
+      with:
+        version: 'v1.28.0'
+        
+    - name: Configure kubectl
+      run: |
+        mkdir -p $HOME/.kube
+        echo "${{ secrets.KUBECONFIG }}" | base64 -d > $HOME/.kube/config
+        chmod 600 $HOME/.kube/config
+        
+    - name: Set deployment variables
+      id: vars
+      run: |
+        if [[ "${{ github.event.inputs.environment }}" == "production" ]]; then
+          echo "namespace=myapp-prod" >> $GITHUB_OUTPUT
+          echo "replicas=3" >> $GITHUB_OUTPUT
+        else
+          echo "namespace=myapp-staging" >> $GITHUB_OUTPUT
+          echo "replicas=1" >> $GITHUB_OUTPUT
+        fi
+        echo "image_tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+        
+    - name: Create namespace
+      run: |
+        kubectl create namespace ${{ steps.vars.outputs.namespace }} --dry-run=client -o yaml | kubectl apply -f -
+        
+    - name: Generate and apply CRD
+      run: |
+        # Build the binary to generate CRD
+        docker run --rm -v $(pwd):/workspace -w /workspace \
+          ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.vars.outputs.image_tag }} \
+          /app/myapp-controller generate-crd
+        kubectl apply -f crd.yaml
+        
+    - name: Deploy RBAC
+      run: |
+        envsubst < k8s/rbac.yaml | kubectl apply -n ${{ steps.vars.outputs.namespace }} -f -
+      env:
+        NAMESPACE: ${{ steps.vars.outputs.namespace }}
+        
+    - name: Deploy controller
+      run: |
+        envsubst < k8s/deployment.yaml | kubectl apply -n ${{ steps.vars.outputs.namespace }} -f -
+      env:
+        NAMESPACE: ${{ steps.vars.outputs.namespace }}
+        IMAGE_TAG: ${{ steps.vars.outputs.image_tag }}
+        REPLICAS: ${{ steps.vars.outputs.replicas }}
+        
+    - name: Wait for deployment
+      run: |
+        kubectl rollout status deployment/myapp-controller -n ${{ steps.vars.outputs.namespace }} --timeout=300s
+        
+    - name: Verify deployment
+      run: |
+        kubectl get pods -n ${{ steps.vars.outputs.namespace }}
+        kubectl get crd myapps.example.com
+        
+    - name: Run smoke tests
+      run: |
+        # Apply test resource
+        kubectl apply -f examples/sample-myapp.yaml -n ${{ steps.vars.outputs.namespace }}
+        sleep 10
+        
+        # Check if deployment was created
+        kubectl get deployment sample-app-deployment -n ${{ steps.vars.outputs.namespace }}
+        
+        # Check MyApp status
+        kubectl get myapp sample-app -n ${{ steps.vars.outputs.namespace }} -o yaml
+        
+        # Cleanup test resource
+        kubectl delete myapp sample-app -n ${{ steps.vars.outputs.namespace }}
+        
+    - name: Notify deployment status
+      if: always()
+      uses: 8398a7/action-slack@v3
+      with:
+        status: ${{ job.status }}
+        text: |
+          Deployment to ${{ steps.vars.outputs.namespace }} ${{ job.status }}!
+          Image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.vars.outputs.image_tag }}
+      env:
+        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
